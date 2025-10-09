@@ -1,10 +1,10 @@
 # 静态博客系统
 
-一个纯静态的博客系统，使用GitHub Pages托管，通过GitHub API读取markdown文件并展示为美观的网页。
+一个纯静态的博客系统，使用 GitHub Pages 托管，自动发现 `posts/` 目录下的 Markdown 文件并展示为美观的网页。
 
 ## 功能特性
 
-- 📝 **简单易用**：只需在 `posts/` 目录下添加 markdown 文件即可发布文章
+- 📝 **简单易用**：只需在 `posts/` 目录下添加 Markdown 文件即可发布文章
 - 🎨 **美观界面**：简洁现代的设计，支持响应式布局  
 - 🔍 **代码高亮**：支持多种编程语言的语法高亮
 - 📱 **移动友好**：在各种设备上都有良好的显示效果
@@ -46,17 +46,23 @@ python -m http.server 8000
 
 ### 添加文章
 
-1. 在 `posts/` 目录下创建新的 `.md` 文件
-2. 在 `posts/index.json` 中添加文章信息：
-   ```json
-   {
-     "filename": "新文章.md",
-     "title": "文章标题",
-     "date": "2024-01-20",
-     "description": "文章简介"
-   }
+1. 在 `posts/` 目录下创建新的 `.md` 文件即可
+2. 可选：在文件顶部加入 [YAML Front Matter](https://jekyllrb.com/docs/front-matter/) 用于自定义标题、摘要、日期等元信息，例如：
+   ```markdown
+   ---
+   title: 我的第一篇文章
+   description: 这是文章的简介
+   date: 2024-01-20
+   ---
    ```
-3. 刷新页面即可看到新文章
+3. 推送到 GitHub 后页面会自动展示最新内容
+
+### GitHub API 访问说明
+
+- 页面会优先尝试直接从 `posts/` 目录加载文章列表。
+- 如果托管环境（例如 GitHub Pages）不允许列出目录，则会自动回退到 GitHub 公共 API。
+- 公共仓库的 API 请求无需任何 Token 或 API Key，但匿名访问存在每小时 **60 次** 的速率限制。
+- 如果看到“403”或“触发速率限制”的提示，稍等片刻再刷新即可。
 
 ### 文章示例
 
@@ -84,8 +90,7 @@ console.log("代码块也支持语法高亮");
 ```
 .
 ├── index.html                    # 博客主页
-├── posts/                        # 存放 markdown 文章的目录
-│   ├── index.json               # 文章索引配置
+├── posts/                        # 存放 Markdown 文章的目录
 │   ├── 欢迎使用博客.md
 │   └── 技术分享.md
 ├── serve.py                      # Python本地服务器
@@ -101,7 +106,7 @@ console.log("代码块也支持语法高亮");
 - **前端**：原生 HTML + JavaScript
 - **Markdown 解析**：marked.js (CDN)
 - **代码高亮**：highlight.js (CDN)
-- **数据源**：相对路径直接访问文件
+- **数据源**：直接扫描 `posts/` 目录（必要时回退到 GitHub API）
 - **部署**：GitHub Pages + GitHub Actions
 
 ## 自定义
@@ -142,7 +147,6 @@ const branch = 'master'; // 或其他分支名
 
 3. **添加文章**：
    - 在 `posts/` 目录下添加 `.md` 文件
-   - 在 `posts/index.json` 中添加文章信息
    - 推送到 GitHub 后会自动更新网站
 
 ### 本地预览
