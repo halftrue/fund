@@ -133,19 +133,11 @@
 
     <script>
         // ========================= 配置区域 =========================
-        // 文章索引文件路径
-        const POSTS_INDEX = './posts/index.json';
         // 文章目录路径
         const POSTS_DIR = './posts/';
 
         // ========================= 工具函数 =========================
         const app = document.getElementById('app');
-
-        async function fetchJSON(url) {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`网络请求失败: ${res.status}`);
-            return await res.json();
-        }
 
         function createElement(tag, attrs = {}, children = []) {
             const el = document.createElement(tag);
@@ -175,21 +167,208 @@
         }
 
         // ========================= 列表页 =========================
+        const postCache = new Map();
+        let postsIndexCache = null;
+
+        function parseFrontMatter(markdown) {
+            const lines = markdown.split(/\r?\n/);
+            let index = 0;
+            const meta = {};
+
+            if (lines[0] && lines[0].trim() === '---') {
+                index = 1;
+                for (; index < lines.length; index++) {
+                    const line = lines[index].trim();
+                    if (line === '---') {
+                        index++;
+                        break;
+                    }
+                    if (!line || line.startsWith('#')) continue;
+                    const colonIndex = line.indexOf(':');
+                    if (colonIndex === -1) continue;
+                    const key = line.slice(0, colonIndex).trim().toLowerCase();
+                    const value = line.slice(colonIndex + 1).trim();
+                    meta[key] = value;
+                }
+            }
+
+            return { meta, startIndex: index };
+        }
+
+        function extractMetadata(markdown, filename) {
+            const decodedFilename = decodeURIComponent(filename);
+            const { meta, startIndex } = parseFrontMatter(markdown);
+            const lines = markdown.split(/\r?\n/);
+
+            let title = meta.title || '';
+            let description = meta.description || meta.summary || '';
+            let date = meta.date || meta.published || meta.publish_date || '';
+
+            for (let i = startIndex; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+
+                if (!title && line.startsWith('#')) {
+                    title = line.replace(/^#+\s*/, '').trim();
+                    continue;
+                }
+
+                if (!description && !line.startsWith('#')) {
+                    description = line
+                        .replace(/[`*_>#]/g, '')
+                        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+                        .trim();
+                }
+
+                if (title && description) break;
+            }
+
+            if (!title) {
+                title = decodedFilename.replace(/\.md$/i, '');
+            }
+
+            if (!description) {
+                description = '';
+            }
+
+            if (!date) {
+                const matched = decodedFilename.match(/\d{4}-\d{2}-\d{2}/);
+                if (matched) {
+                    date = matched[0];
+                }
+            }
+
+            return { title, description, date };
+        }
+
+        function getGitHubRepoInfo() {
+            const { hostname, pathname } = window.location;
+            if (!hostname.endsWith('github.io')) return null;
+
+            const owner = hostname.replace('.github.io', '');
+            const segments = pathname.split('/').filter(Boolean);
+
+            if (segments.length === 0) {
+                return { owner, repo: `${owner}.github.io` };
+            }
+
+            return { owner, repo: segments[0] };
+        }
+
+        async function fetchText(url) {
+            const res = await fetch(url);
+            if (!res.ok) {
+                throw new Error(`网络请求失败: ${res.status}`);
+            }
+            return await res.text();
+        }
+
+        async function loadMetadata(filename, url) {
+            const markdown = await fetchText(url);
+            postCache.set(filename, { content: markdown, url });
+            const metadata = extractMetadata(markdown, filename);
+            return { filename, url, ...metadata };
+        }
+
+        async function listPostsFromDirectory() {
+            const directoryUrl = POSTS_DIR;
+            const res = await fetch(directoryUrl);
+            if (!res.ok) {
+                throw new Error(`目录访问失败: ${res.status}`);
+            }
+
+            const html = await res.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const links = Array.from(doc.querySelectorAll('a'))
+                .map(a => decodeURIComponent(a.getAttribute('href') || ''))
+                .filter(href => href.toLowerCase().endsWith('.md'))
+                .map(href => href.split('/').filter(Boolean).pop())
+                .filter(Boolean);
+
+            const unique = Array.from(new Set(links));
+            if (unique.length === 0) {
+                return [];
+            }
+
+            return Promise.all(unique.map(filename => loadMetadata(filename, POSTS_DIR + filename)));
+        }
+
+        async function listPostsFromGitHub() {
+            const repoInfo = getGitHubRepoInfo();
+            if (!repoInfo) {
+                throw new Error('无法自动识别 GitHub 仓库信息');
+            }
+
+            const apiUrl = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/contents/posts`;
+            const res = await fetch(apiUrl);
+            if (!res.ok) {
+                throw new Error(`GitHub API 请求失败: ${res.status}`);
+            }
+
+            const data = await res.json();
+            const files = (Array.isArray(data) ? data : []).filter(item => item.type === 'file' && /\.md$/i.test(item.name));
+
+            return Promise.all(files.map(file => loadMetadata(file.name, file.download_url)));
+        }
+
+        async function fetchPostList() {
+            if (postsIndexCache) return postsIndexCache;
+
+            try {
+                const localPosts = await listPostsFromDirectory();
+                postsIndexCache = localPosts;
+                return postsIndexCache;
+            } catch (err) {
+                console.warn('从本地目录读取文章列表失败，将尝试使用 GitHub API。', err);
+            }
+
+            const githubPosts = await listPostsFromGitHub();
+            postsIndexCache = githubPosts;
+            return postsIndexCache;
+        }
+
+        async function fetchPostContent(filename) {
+            if (postCache.has(filename)) {
+                return postCache.get(filename).content;
+            }
+
+            const posts = await fetchPostList();
+            const post = posts.find(p => p.filename === filename);
+            const url = post ? post.url : POSTS_DIR + filename;
+            const markdown = await fetchText(url);
+            postCache.set(filename, { content: markdown, url });
+            return markdown;
+        }
+
+        function sortPosts(posts) {
+            return posts.slice().sort((a, b) => {
+                if (a.date && b.date) {
+                    const diff = new Date(b.date) - new Date(a.date);
+                    if (!Number.isNaN(diff)) {
+                        return diff;
+                    }
+                }
+                return a.title.localeCompare(b.title, 'zh');
+            });
+        }
+
         async function renderPostList() {
             try {
-                const posts = await fetchJSON(POSTS_INDEX);
+                const posts = await fetchPostList();
+                const sortedPosts = sortPosts(posts);
 
-                if (posts.length === 0) {
-                    setContent(createElement('div', { class: 'no-posts', html: '还没有文章。请在 <code>posts/</code> 目录下添加 markdown 文件并更新 index.json。' }));
+                if (sortedPosts.length === 0) {
+                    setContent(createElement('div', { class: 'no-posts', html: '还没有文章。请在 <code>posts/</code> 目录下添加 markdown 文件。' }));
                     return;
                 }
 
                 const list = createElement('ul', { class: 'post-list' });
-                posts.forEach(post => {
+                sortedPosts.forEach(post => {
                     const li = createElement('li', { class: 'post-item' });
                     const link = createElement('a', { href: `?file=${encodeURIComponent(post.filename)}` }, post.title);
                     li.appendChild(createElement('div', { class: 'post-title' }, link));
-                    
+
                     // 添加描述和日期
                     const meta = createElement('div', { class: 'post-meta' });
                     if (post.description) {
@@ -206,17 +385,14 @@
                 setContent(list);
             } catch (err) {
                 console.error(err);
-                setContent(createElement('div', { class: 'no-posts', html: '获取文章列表失败。请检查 posts/index.json 文件是否存在。' }));
+                setContent(createElement('div', { class: 'no-posts', html: '获取文章列表失败。请检查 GitHub API 访问额度或 <code>posts/</code> 目录。' }));
             }
         }
 
         // ========================= 文章页 =========================
         async function renderPost(filename) {
             try {
-                const postUrl = POSTS_DIR + filename;
-                const res = await fetch(postUrl);
-                if (!res.ok) throw new Error('文章加载失败');
-                const markdown = await res.text();
+                const markdown = await fetchPostContent(filename);
 
                 const htmlContent = marked.parse(markdown, {
                     highlight: function(code, lang) {
@@ -226,12 +402,11 @@
                         return hljs.highlightAuto(code).value;
                     }
                 });
-                
-                // 获取文章标题
-                const posts = await fetchJSON(POSTS_INDEX);
+
+                const posts = await fetchPostList();
                 const post = posts.find(p => p.filename === filename);
-                const title = post ? post.title : filename.replace(/\.md$/, '');
-                
+                const title = post ? post.title : decodeURIComponent(filename).replace(/\.md$/, '');
+
                 const container = createElement('div', {}, [
                     createElement('a', { class: 'back-link', href: './' }, '← 返回首页'),
                     createElement('article', { class: 'content', html: htmlContent })
