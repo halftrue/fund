@@ -301,8 +301,12 @@
             }
 
             const apiUrl = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/contents/posts`;
+            // GitHub 的公共 API 可以匿名访问，无需 token，但存在每小时 60 次的速率限制。
             const res = await fetch(apiUrl);
             if (!res.ok) {
+                if (res.status === 403) {
+                    throw new Error('GitHub API 请求失败: 403（匿名访问触发速率限制，稍后再试即可）');
+                }
                 throw new Error(`GitHub API 请求失败: ${res.status}`);
             }
 
@@ -385,7 +389,8 @@
                 setContent(list);
             } catch (err) {
                 console.error(err);
-                setContent(createElement('div', { class: 'no-posts', html: '获取文章列表失败。请检查 GitHub API 访问额度或 <code>posts/</code> 目录。' }));
+                const message = `获取文章列表失败：${err.message || err}`;
+                setContent(createElement('div', { class: 'no-posts', html: `${message}<br>请检查 <code>posts/</code> 目录或稍后重试。` }));
             }
         }
 
